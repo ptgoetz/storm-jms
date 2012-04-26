@@ -1,6 +1,7 @@
 package backtype.storm.contrib.jms.spout;
 
 import java.util.Map;
+import java.util.Timer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -48,7 +49,6 @@ public class JmsSpout implements IRichSpout, MessageListener {
 	private static final Logger LOG = LoggerFactory.getLogger(JmsSpout.class);
 
 	// JMS options
-	private boolean jmsTransactional = false;
 	private int jmsAcknowledgeMode = Session.AUTO_ACKNOWLEDGE;
 	
 	private boolean distributed = true;
@@ -64,6 +64,11 @@ public class JmsSpout implements IRichSpout, MessageListener {
 
 	private transient Connection connection;
 	private transient Session session;
+	
+	private boolean hasFailures = false;
+	public Object recoveryMutex = new Object();
+	private Timer recoveryTimer = null;
+	private long recoveryPeriod = 30*1000;  // Default to 30 seconds
 	
 	/**
 	 * Sets the JMS Session acknowledgement mode for the JMS seesion associated with this spout.
@@ -99,33 +104,6 @@ public class JmsSpout implements IRichSpout, MessageListener {
 	}
 	
 	/**
-	 * Set whether this Spout uses the JMS transactional model by defualt.
-	 * <p/>
-	 * If <code>true</code> the spout will always request acks from downstream
-	 * bolts, using the incoming JMS message ID as the Storm message ID.
-	 * <p/>
-	 * If <code>false</code> the spout will request acks from downstream bolts
-	 * only if the spout's JmsAcknowledgeMode is <b><i>not</i></b> AUTO_ACKNOWLEDGE
-	 * and the JMS message DeliveryMode is <b><i>not</i></b> AUTO_ACKNOWLEDGE.
-	 * <p/>
-	 * If the spout determines that a JMS message should be handled transactionally
-	 * (i.e. acknowledged in JMS terms), it will be JMS-acknowledged in the spout's
-	 * <code>ack()</code> method.
-	 * <p/>
-	 * Otherwise, if a downstream spout that has anchored on one of this spouts tuples
-	 * fails to acknowledge an emitted tuple, the JMS message will not be not be acknowledged,
-	 * and potentially be set for retransmission, depending on the underlying JMS implementation
-	 * and configuration.
-	 * 
-	 * @param transactional
-	 */
-	public void setJmsTransactional(boolean transactional){
-		this.jmsTransactional = transactional;
-	}
-	public boolean isJmsTransaction(){
-		return this.jmsTransactional;
-	}
-	/**
 	 * Set the <code>backtype.storm.contrib.jms.JmsProvider</code>
 	 * implementation that this Spout will use to connect to 
 	 * a JMS <code>javax.jms.Desination</code>
@@ -154,8 +132,11 @@ public class JmsSpout implements IRichSpout, MessageListener {
 	 * by the <code>nextTuple()</code> method.
 	 */
 	public void onMessage(Message msg) {
+	        try {
+                    LOG.debug("Queuing msg [" + msg.getJMSMessageID() + "]");
+                } catch (JMSException e) {
+                }
 		this.queue.offer(msg);
-
 	}
 
 	/**
@@ -181,12 +162,16 @@ public class JmsSpout implements IRichSpout, MessageListener {
 			ConnectionFactory cf = this.jmsProvider.connectionFactory();
 			Destination dest = this.jmsProvider.destination();
 			this.connection = cf.createConnection();
-			this.session = connection.createSession(this.jmsTransactional,
+			this.session = connection.createSession(false,
 					this.jmsAcknowledgeMode);
 			MessageConsumer consumer = session.createConsumer(dest);
 			consumer.setMessageListener(this);
 			connection.start();
-
+			if (this.isDurableSubscription()){
+			    this.recoveryTimer = new Timer();
+			    this.recoveryTimer.scheduleAtFixedRate(new RecoveryTask(this), 10, this.recoveryPeriod);
+			}
+			
 		} catch (Exception e) {
 			LOG.warn("Error creating JMS connection.", e);
 		}
@@ -218,8 +203,7 @@ public class JmsSpout implements IRichSpout, MessageListener {
 				// ack if we're not in AUTO_ACKNOWLEDGE mode, or the message requests ACKNOWLEDGE
 				LOG.debug("Requested deliveryMode: " + toDeliveryModeString(msg.getJMSDeliveryMode()));
 				LOG.debug("Our deliveryMode: " + toDeliveryModeString(this.jmsAcknowledgeMode));
-				if (this.jmsTransactional
-						|| (this.jmsAcknowledgeMode != Session.AUTO_ACKNOWLEDGE) 
+				if (this.isDurableSubscription()
 						|| (msg.getJMSDeliveryMode() != Session.AUTO_ACKNOWLEDGE)) {
 					LOG.debug("Requesting acks.");
 					this.collector.emit(vals, msg.getJMSMessageID());
@@ -262,9 +246,11 @@ public class JmsSpout implements IRichSpout, MessageListener {
 	 * Will only be called if we're transactional or not AUTO_ACKNOWLEDGE
 	 */
 	public void fail(Object msgId) {
-		LOG.debug("Message failed: " + msgId);
+		LOG.warn("Message failed: " + msgId);
 		this.pendingMessages.remove(msgId);
-
+		synchronized(this.recoveryMutex){
+		    this.hasFailures = true;
+		}
 	}
 
 	public void declareOutputFields(OutputFieldsDeclarer declarer) {
@@ -272,6 +258,28 @@ public class JmsSpout implements IRichSpout, MessageListener {
 
 	}
 
+	/**
+         * Returns <code>true</code> if the spout has received failures 
+         * from which it has not yet recovered.
+         */
+	public boolean hasFailures(){
+	        return this.hasFailures;
+	}
+	
+	protected void recovered(){
+	        this.hasFailures = false;
+	}
+	
+	/**
+	 * Sets the periodicity of the timer task that 
+	 * checks for failures and recovers the JMS session.
+	 * 
+	 * @param the period
+	 */
+	public void setRecoveryPeriod(long period){
+	    this.recoveryPeriod = period;
+	}
+	
 	public boolean isDistributed() {
 		return this.distributed;
 	}
@@ -308,5 +316,12 @@ public class JmsSpout implements IRichSpout, MessageListener {
 
 		}
 	}
-
+	
+	protected Session getSession(){
+	        return this.session;
+	}
+	
+	private boolean isDurableSubscription(){
+	    return (this.jmsAcknowledgeMode != Session.AUTO_ACKNOWLEDGE);
+	}
 }
