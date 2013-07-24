@@ -13,8 +13,10 @@ import javax.jms.MessageProducer;
 import javax.jms.Session;
 import javax.jms.TextMessage;
 
+import backtype.storm.task.TopologyContext;
 import org.junit.Assert;
 import org.junit.Test;
+import org.mockito.Mockito;
 import org.mortbay.log.Log;
 
 import backtype.storm.contrib.jms.JmsProvider;
@@ -22,7 +24,7 @@ import backtype.storm.spout.SpoutOutputCollector;
 
 public class JmsSpoutTest {
     @Test
-    public void testFailure() throws JMSException, Exception{
+    public void testFailure() throws Exception{
         JmsSpout spout = new JmsSpout();
         JmsProvider mockProvider = new MockJmsProvider();
         MockSpoutOutputCollector mockCollector = new MockSpoutOutputCollector();
@@ -31,7 +33,7 @@ public class JmsSpoutTest {
         spout.setJmsTupleProducer(new MockTupleProducer());
         spout.setJmsAcknowledgeMode(Session.CLIENT_ACKNOWLEDGE);
         spout.setRecoveryPeriod(10); // Rapid recovery for testing.
-        spout.open(new HashMap<String,String>(), null, collector);
+        spout.open(new HashMap<String,String>(), Mockito.mock(TopologyContext.class), collector);
         Message msg = this.sendMessage(mockProvider.connectionFactory(), mockProvider.destination());
         Thread.sleep(100);
         spout.nextTuple(); // Pretend to be storm.
@@ -54,7 +56,7 @@ public class JmsSpoutTest {
         oos.close();
         Assert.assertTrue(out.toByteArray().length > 0);
     }
-    
+
     public Message sendMessage(ConnectionFactory connectionFactory, Destination destination) throws JMSException {        
         Session mySess = connectionFactory.createConnection().createSession(false, Session.CLIENT_ACKNOWLEDGE);
         MessageProducer producer = mySess.createProducer(destination);

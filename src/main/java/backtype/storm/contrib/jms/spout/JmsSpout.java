@@ -69,7 +69,6 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 	
 	private boolean hasFailures = false;
 	public final Serializable recoveryMutex = "RECOVERY_MUTEX";
-	private Timer recoveryTimer = null;
 	private long recoveryPeriod = -1; // default to disabled
 	
 	/**
@@ -157,7 +156,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 		if(this.tupleProducer == null){
 			throw new IllegalStateException("JMS Tuple Producer has not been set.");
 		}
-		Integer topologyTimeout = (Integer)conf.get("topology.message.timeout.secs");
+		Number topologyTimeout = (Number)conf.get("topology.message.timeout.secs");
 		// TODO fine a way to get the default timeout from storm, so we're not hard-coding to 30 seconds (it could change)
 		topologyTimeout = topologyTimeout == null ? 30 : topologyTimeout;
 		if( (topologyTimeout.intValue() * 1000 )> this.recoveryPeriod){
@@ -179,8 +178,8 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 			consumer.setMessageListener(this);
 			this.connection.start();
 			if (this.isDurableSubscription() && this.recoveryPeriod > 0){
-			    this.recoveryTimer = new Timer();
-			    this.recoveryTimer.scheduleAtFixedRate(new RecoveryTask(), 10, this.recoveryPeriod);
+                Timer recoveryTimer = new Timer("JmsSpout-recovery-timer-" + context.getThisTaskId(), true);
+			    recoveryTimer.scheduleAtFixedRate(new RecoveryTask(), 10, this.recoveryPeriod);
 			}
 			
 		} catch (Exception e) {
