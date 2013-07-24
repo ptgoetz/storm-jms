@@ -38,7 +38,7 @@
 
 
 	<properties>
-		<storm.version>0.8.1</storm.version>
+		<storm.version>0.8.2</storm.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -85,4 +85,10 @@
 			</plugin>
 		</plugins>
 	</build>
+	<repositories>
+		<repository>
+			<id>clojars.org</id>
+			<url>http://clojars.org/repo</url>
+		</repository>
+	</repositories>
 </project>
