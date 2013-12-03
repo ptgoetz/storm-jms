@@ -42,4 +42,9 @@ public class MockJmsProvider implements JmsProvider {
         return this.destination;
     }
 
+    @Override
+    public String messageSelector() {
+        return null;
+    }
+
 }
