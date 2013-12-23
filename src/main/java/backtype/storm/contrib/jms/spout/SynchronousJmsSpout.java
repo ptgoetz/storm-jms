@@ -70,7 +70,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     private transient MessageConsumer consumer;
 
     private volatile boolean hasFailures = false;
-    private AtomicInteger msgCounter;
+    private final AtomicInteger msgCounter = new AtomicInteger(0);
 
     /**
      * Sets the JMS Session acknowledgement mode for the JMS seesion associated with this spout.
