@@ -358,7 +358,7 @@ public class TridentJmsSpout implements ITridentSpout<JmsBatch> {
 
         private final String name;
         
-        private final Logger LOG = LoggerFactory.getLogger(JmsBatchCoordinator.class);
+        private final Logger LOG = LoggerFactory.getLogger(getClass());
 
         public JmsBatchCoordinator(String name) {
             this.name = name;
