@@ -358,20 +358,22 @@ public class TridentJmsSpout implements ITridentSpout<JmsBatch> {
 
         private final String name;
         
-        private final Logger LOG = LoggerFactory.getLogger(JmsBatchCoordinator.class);
+        private final Logger LOG = LoggerFactory.getLogger(getClass());
 
         public JmsBatchCoordinator(String name) {
             this.name = name;
             LOG.info("Created batch coordinator for "+name);
         }
-        
-        @Override
-        public JmsBatch initializeTransaction(long txid, JmsBatch prevMetadata) {
-            LOG.debug("Initialise transaction "+txid+" for "+name);
-            return null;
-        }
 
-        @Override
+
+      @Override
+      public JmsBatch initializeTransaction(long txid, JmsBatch jmsBatch, JmsBatch jmsBatch2) {
+        LOG.debug("Initialise transaction " + txid + " for " + name);
+        return null;
+      }
+
+
+      @Override
         public void success(long txid) {
         }
 
