@@ -175,7 +175,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 			this.connection = cf.createConnection();
 			this.session = connection.createSession(false,
 					this.jmsAcknowledgeMode);
-			MessageConsumer consumer = session.createConsumer(dest);
+			MessageConsumer consumer = session.createConsumer(dest, this.jmsProvider.messageSelector());
 			consumer.setMessageListener(this);
 			this.connection.start();
 			if (this.isDurableSubscription() && this.recoveryPeriod > 0){
@@ -244,7 +244,8 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 				msg.acknowledge();
 				LOG.debug("JMS Message acked: " + msgId);
 			} catch (JMSException e) {
-				LOG.warn("Error acknowldging JMS message: " + msgId, e);
+				LOG.warn("Error acknowledging JMS message: " + msgId, e);
+                fail(msgId);
 			}
 		} else {
 			LOG.warn("Couldn't acknowledge unknown JMS message ID: " + msgId);

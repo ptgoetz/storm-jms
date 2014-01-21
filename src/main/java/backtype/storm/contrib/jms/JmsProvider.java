@@ -27,4 +27,12 @@ public interface JmsProvider extends Serializable{
 	 * @throws Exception
 	 */
 	public Destination destination() throws Exception;
+    
+    /**
+     * Provides an optional message selector for consuming messages.
+     * Only messages with properties matching the message selector expression are delivered. 
+     * A value of null or an empty string indicates that there is no message selector for the message consumer.
+     * @return see description
+     */
+    public String messageSelector();
 }
