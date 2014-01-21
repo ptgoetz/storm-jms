@@ -39,7 +39,7 @@ import javax.jms.MessageProducer;
  * <p/>
  * Typically, developers will supply a custom <code>JmsTupleProducer</code> implementation appropriate for the expected
  * message content.
- *
+ * 
  * based on code from P. Taylor Goetz
  *
  * @author Winfried Umbrath
@@ -50,7 +50,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     private static final Logger LOG = LoggerFactory.getLogger(SynchronousJmsSpout.class);
 
-    private static final int BATCH_SIZE = 50;
+    private static int BATCH_SIZE;
+    private static final int DEFAULT_BATCH_SIZE = 50;
 
     // JMS options
     private int jmsAcknowledgeMode = Session.AUTO_ACKNOWLEDGE;
@@ -71,6 +72,18 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     private volatile boolean hasFailures = false;
     private final AtomicInteger msgCounter = new AtomicInteger(0);
+
+    public SynchronousJmsSpout() {
+        BATCH_SIZE = DEFAULT_BATCH_SIZE;
+    }
+    
+    /**
+     * Constructs a <code>SynchronousJmsSpout</code>
+     * @param _batchSize Defines the batch size to be used.
+     */
+    public SynchronousJmsSpout(int _batchSize) {
+        BATCH_SIZE = _batchSize;
+    }
 
     /**
      * Sets the JMS Session acknowledgement mode for the JMS seesion associated with this spout.
@@ -187,6 +200,12 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             // get the tuple from the handler
             try {
                 Values vals = tupleProducer.toTuple(msg);
+                if (vals == null) {
+                    pendingMessages.put(msg.getJMSMessageID(), msg);
+                    msgCounter.incrementAndGet();
+                    ack(msg.getJMSMessageID());
+                    return;
+                }
                 // ack if we're not in AUTO_ACKNOWLEDGE mode, or the message requests ACKNOWLEDGE
                 LOG.debug("Requested deliveryMode: " + toDeliveryModeString(msg.getJMSDeliveryMode()));
                 LOG.debug("Our deliveryMode: " + toDeliveryModeString(jmsAcknowledgeMode));
