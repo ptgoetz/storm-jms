@@ -50,7 +50,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     private static final Logger LOG = LoggerFactory.getLogger(SynchronousJmsSpout.class);
 
-    private static int BATCH_SIZE;
+    private int batchSize;
     private static final int DEFAULT_BATCH_SIZE = 50;
 
     // JMS options
@@ -74,7 +74,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     private final AtomicInteger msgCounter = new AtomicInteger(0);
 
     public SynchronousJmsSpout() {
-        BATCH_SIZE = DEFAULT_BATCH_SIZE;
+        batchSize = DEFAULT_BATCH_SIZE;
     }
     
     /**
@@ -82,7 +82,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
      * @param _batchSize Defines the batch size to be used.
      */
     public SynchronousJmsSpout(int _batchSize) {
-        BATCH_SIZE = _batchSize;
+        batchSize = _batchSize;
     }
 
     /**
@@ -189,8 +189,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     public void nextTuple() {
         Message msg = null;
         try {
-            if (msgCounter.get() < BATCH_SIZE) {
-                msg = consumer.receive(30l);
+            if (msgCounter.get() < batchSize) {
+                msg = consumer.receiveNoWait();
             }
         } catch (JMSException ex) {
             LOG.info("Exception when trying to receive message: " + ex.getMessage());
@@ -273,7 +273,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
         if (msg != null) {
             // only acknowledge or recover when full batch has been processed
-            if (msgCounter.get() >= BATCH_SIZE && pendingMessages.isEmpty()) {
+            if (msgCounter.get() >= batchSize && pendingMessages.isEmpty()) {
                 if (!hasFailures()) {
                     try {
                         msg.acknowledge();
