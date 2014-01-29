@@ -253,16 +253,19 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                     // these messages in a designated queue.
                     // the original message will be properly acknowledged
                     // TODO: make this behaviour configurable
-
                     Session producerSession = connection.createSession(false, jmsAcknowledgeMode);
-                    MessageProducer producer = producerSession.createProducer(msg.getJMSDestination());
-                    producer.send(msg, msg.getJMSDeliveryMode(), msg.getJMSPriority(), 1);
-                    producer.close();
+                    try {
+                        MessageProducer producer = producerSession.createProducer(msg.getJMSDestination());
+                        producer.send(msg, msg.getJMSDeliveryMode(), msg.getJMSPriority(), 1);
+                        producer.close();
+                    } finally {
+                        producerSession.close();
+                    }
                 } else {
                     hasFailures = true;
                 }
             } catch (JMSException ex) {
-                java.util.logging.Logger.getLogger(SynchronousJmsSpout.class.getName()).log(Level.SEVERE, null, ex);
+                LOG.error(null, ex);
             }
         }
         processBatch(_msgId);
