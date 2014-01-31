@@ -1,29 +1,34 @@
 package backtype.storm.contrib.jms.spout;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.jms.Connection;
-import javax.jms.ConnectionFactory;
-import javax.jms.Destination;
+import javax.jms.ExceptionListener;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.MessageConsumer;
+import javax.jms.MessageProducer;
 import javax.jms.Session;
-
-import backtype.storm.topology.base.BaseRichSpout;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import backtype.storm.contrib.jms.JmsProvider;
 import backtype.storm.contrib.jms.JmsTupleProducer;
 import backtype.storm.spout.SpoutOutputCollector;
 import backtype.storm.task.TopologyContext;
 import backtype.storm.topology.OutputFieldsDeclarer;
+import backtype.storm.topology.base.BaseRichSpout;
 import backtype.storm.tuple.Values;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Level;
-import javax.jms.MessageProducer;
+import backtype.storm.utils.Utils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A Storm <code>Spout</code> implementation that pulls messages from a JMS topic or queue and outputs tuples based on
@@ -43,6 +48,7 @@ import javax.jms.MessageProducer;
  * based on code from P. Taylor Goetz
  *
  * @author Winfried Umbrath
+ * @author Carsten Krebs
  *
  */
 @SuppressWarnings("serial")
@@ -50,11 +56,15 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     private static final Logger LOG = LoggerFactory.getLogger(SynchronousJmsSpout.class);
 
-    private int batchSize;
     private static final int DEFAULT_BATCH_SIZE = 50;
 
+    /** time in ms after a batch is committed, reagrdless of the number if messages consumed */
+    private static final long ACK_INTERVAL_MS = 2000L;
+
+    private int batchSize;
+
     // JMS options
-    private int jmsAcknowledgeMode = Session.AUTO_ACKNOWLEDGE;
+    private int jmsAcknowledgeMode = Session.CLIENT_ACKNOWLEDGE;
 
     private boolean distributed = true;
 
@@ -62,16 +72,12 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     private JmsProvider jmsProvider;
 
-    private ConcurrentHashMap<String, Message> pendingMessages;
-
     private SpoutOutputCollector collector;
 
-    private transient Connection connection;
-    private transient Session session;
-    private transient MessageConsumer consumer;
+    private transient ExecutorService executorService;
 
-    private volatile boolean hasFailures = false;
-    private final AtomicInteger msgCounter = new AtomicInteger(0);
+    private transient Consumer consumer;
+
 
     public SynchronousJmsSpout() {
         batchSize = DEFAULT_BATCH_SIZE;
@@ -100,10 +106,11 @@ public class SynchronousJmsSpout extends BaseRichSpout {
      */
     public void setJmsAcknowledgeMode(int _mode) {
         switch (_mode) {
-            case Session.AUTO_ACKNOWLEDGE:
             case Session.CLIENT_ACKNOWLEDGE:
-            case Session.DUPS_OK_ACKNOWLEDGE:
                 break;
+            case Session.AUTO_ACKNOWLEDGE:
+            case Session.DUPS_OK_ACKNOWLEDGE:
+                throw new IllegalArgumentException("acknowledgmode is currently not implemented/supported!");
             default:
                 throw new IllegalArgumentException("Unknown Acknowledge mode: " + _mode + " (See javax.jms.Session for valid values)");
 
@@ -147,8 +154,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
      *
      */
     @Override
-    public void open(Map conf, TopologyContext context,
-            SpoutOutputCollector _collector) {
+    public void open(final Map _conf, final TopologyContext _context, final SpoutOutputCollector _collector) {
         if (jmsProvider == null) {
             throw new IllegalStateException("JMS provider has not been set.");
         }
@@ -156,75 +162,55 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             throw new IllegalStateException("JMS Tuple Producer has not been set.");
         }
 
-        pendingMessages = new ConcurrentHashMap<String, Message>();
         collector = _collector;
-        try {
-            ConnectionFactory cf = jmsProvider.connectionFactory();
-            Destination dest = jmsProvider.destination();
-            connection = cf.createConnection();
-            session = connection.createSession(false,
-                    jmsAcknowledgeMode);
-            consumer = session.createConsumer(dest, jmsProvider.messageSelector());
-            connection.start();
-
-        } catch (Exception e) {
-            LOG.warn("Error creating JMS connection.", e);
-        }
-
+        executorService = Executors.newSingleThreadExecutor();
     }
 
     @Override
     public void close() {
-        try {
-            LOG.debug("Closing JMS connection.");
-            session.close();
-            connection.close();
-        } catch (JMSException e) {
-            LOG.warn("Error closing JMS connection.", e);
-        }
+        super.close();
 
+        executorService.shutdown();
     }
+
+    @Override
+    public void activate() {
+        super.activate();
+
+        consumer = new Consumer();
+        consumer.start();
+        executorService.submit(consumer);
+    }
+
+    @Override
+    public void deactivate() {
+        super.deactivate();
+
+        consumer.terminate();
+        consumer = null;
+    }
+
 
     @Override
     public void nextTuple() {
-        Message msg = null;
-        try {
-            if (msgCounter.get() < batchSize) {
-                msg = consumer.receiveNoWait();
-            }
-        } catch (JMSException ex) {
-            LOG.info("Exception when trying to receive message: " + ex.getMessage());
-        }
-        if (msg != null) {
-            LOG.debug("sending tuple: %s ", msg.toString());
-            // get the tuple from the handler
-            try {
-                Values vals = tupleProducer.toTuple(msg);
-                if (vals == null) {
-                    pendingMessages.put(msg.getJMSMessageID(), msg);
-                    msgCounter.incrementAndGet();
-                    ack(msg.getJMSMessageID());
-                    return;
-                }
-                // ack if we're not in AUTO_ACKNOWLEDGE mode, or the message requests ACKNOWLEDGE
-                LOG.debug("Requested deliveryMode: " + toDeliveryModeString(msg.getJMSDeliveryMode()));
-                LOG.debug("Our deliveryMode: " + toDeliveryModeString(jmsAcknowledgeMode));
-                if (isDurableSubscription()
-                        || (msg.getJMSDeliveryMode() != Session.AUTO_ACKNOWLEDGE)) {
-                    LOG.debug("Requesting acks.");
-                    collector.emit(vals, msg.getJMSMessageID());
-
-					// at this point we successfully emitted. Store
-                    // the message and message ID so we can do a
-                    // JMS acknowledge later
-                    pendingMessages.put(msg.getJMSMessageID(), msg);
-                    msgCounter.incrementAndGet();
+        if (consumer != null) {
+            final JMSValues jmsValues = consumer.nextTuple();
+            if (jmsValues != null) {
+                if (jmsAcknowledgeMode == Session.CLIENT_ACKNOWLEDGE) {
+                    collector.emit(jmsValues.values, jmsValues.jmsMessageID);
                 } else {
-                    collector.emit(vals);
+                    collector.emit(jmsValues.values);
                 }
-            } catch (JMSException e) {
-                LOG.warn("Unable to convert JMS message: " + msg);
+            } else {
+                Utils.sleep(3);
             }
+        }
+    }
+
+    private void logDuration(final String _msg, final long _ts) {
+        final long duration = System.currentTimeMillis() - _ts;
+        if (duration > 10) {
+            LOG.debug("{}: call took {} ms", _msg, duration);
         }
     }
 
@@ -232,76 +218,20 @@ public class SynchronousJmsSpout extends BaseRichSpout {
      * Will only be called if we're transactional or not AUTO_ACKNOWLEDGE
      */
     @Override
-    public void ack(Object _msgId) {
-        processBatch(_msgId);
+    public void ack(final Object _msgId) {
+        if (consumer != null) {
+            consumer.ack((String) _msgId);
+        }
     }
 
     /*
      * Will only be called if we're transactional or not AUTO_ACKNOWLEDGE
      */
     @Override
-    public void fail(Object _msgId) {
-        LOG.warn("Message failed: " + _msgId);
-        Message msg = pendingMessages.get(_msgId);
-        if (msg != null) {
-            try {
-                if (msg.getJMSRedelivered()) {
-                    // poisoned message protection:
-                    // this is the second failure -> expire
-                    // the message and send back to the queue
-                    // depending on the broker used the queue can be configured to move 
-                    // these messages in a designated queue.
-                    // the original message will be properly acknowledged
-                    // TODO: make this behaviour configurable
-                    Session producerSession = connection.createSession(false, jmsAcknowledgeMode);
-                    try {
-                        MessageProducer producer = producerSession.createProducer(msg.getJMSDestination());
-                        producer.send(msg, msg.getJMSDeliveryMode(), msg.getJMSPriority(), 1);
-                        producer.close();
-                    } finally {
-                        producerSession.close();
-                    }
-                } else {
-                    hasFailures = true;
-                }
-            } catch (JMSException ex) {
-                LOG.error(null, ex);
-            }
-        }
-        processBatch(_msgId);
-    }
-
-    private void processBatch(Object _msgId) {
-        Message msg = pendingMessages.remove(_msgId);
-
-        if (msg != null) {
-            // only acknowledge or recover when full batch has been processed
-            if (msgCounter.get() >= batchSize && pendingMessages.isEmpty()) {
-                if (!hasFailures()) {
-                    try {
-                        msg.acknowledge();
-                        LOG.debug("JMS Message acked: " + _msgId);
-                    } catch (JMSException e) {
-                        LOG.warn("Error acknowledging JMS message: " + _msgId, e);
-                        doRecover();
-                    }
-                } else {
-                    doRecover();
-                }
-                msgCounter.set(0);
-            }
-        } else {
-            LOG.warn("Unknown JMS message ID: " + _msgId);
-        }
-    }
-
-    private void doRecover() {
-        LOG.info("Recovering session from a message failure.");
-        try {
-            getSession().recover();
-            recovered();
-        } catch (JMSException ex) {
-            LOG.warn("Could not recover jms session.", ex);
+    public void fail(final Object _msgId) {
+        LOG.warn("message failed: {}", _msgId);
+        if (consumer != null) {
+            consumer.recover();
         }
     }
 
@@ -309,17 +239,6 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     public void declareOutputFields(OutputFieldsDeclarer _declarer) {
         tupleProducer.declareOutputFields(_declarer);
 
-    }
-
-    /**
-     * Returns <code>true</code> if the spout has received failures from which it has not yet recovered.
-     */
-    protected boolean hasFailures() {
-        return hasFailures;
-    }
-
-    protected void recovered() {
-        hasFailures = false;
     }
 
     public boolean isDistributed() {
@@ -344,26 +263,281 @@ public class SynchronousJmsSpout extends BaseRichSpout {
         distributed = _distributed;
     }
 
-    private static final String toDeliveryModeString(int _deliveryMode) {
-        switch (_deliveryMode) {
-            case Session.AUTO_ACKNOWLEDGE:
-                return "AUTO_ACKNOWLEDGE";
-            case Session.CLIENT_ACKNOWLEDGE:
-                return "CLIENT_ACKNOWLEDGE";
-            case Session.DUPS_OK_ACKNOWLEDGE:
-                return "DUPS_OK_ACKNOWLEDGE";
-            default:
-                return "UNKNOWN";
+    private static class JMSValues {
+        final String jmsMessageID;
+        final Values values;
 
+        JMSValues(final String _jmsMessageID, final Values _values) throws JMSException {
+            jmsMessageID = _jmsMessageID;
+            values = _values;
         }
     }
 
-    protected Session getSession() {
-        return session;
-    }
+    private class Consumer implements Runnable, ExceptionListener {
 
-    private boolean isDurableSubscription() {
-        return (jmsAcknowledgeMode != Session.AUTO_ACKNOWLEDGE);
+        private transient Connection jmsConnection;
+
+        private transient Session jmsSession;
+
+        private transient MessageConsumer jmsConsumer;
+
+        private int msgCount = 0;
+
+        private final Set<String> pending = new HashSet<String>();
+
+        private final AtomicBoolean failed = new AtomicBoolean(false);
+
+        private final AtomicBoolean foreRestart = new AtomicBoolean(false);
+
+        private final AtomicBoolean shutdown = new AtomicBoolean(false);
+
+        private final ReentrantLock lock = new ReentrantLock();
+
+        private final Condition msgResponseReceived = lock.newCondition();
+
+        private final List<String> acked = new ArrayList<String>(batchSize);
+
+        private final ConcurrentLinkedQueue<JMSValues> queue = new ConcurrentLinkedQueue<JMSValues>();
+
+        @Override
+        public void run() {
+            if (jmsConsumer == null) {
+                throw new IllegalStateException("consumer is not started!");
+            }
+
+            try {
+                while (!shutdown.get()) {
+                    try {
+                        receiveBatch();
+                    } catch (final InterruptedException e) {
+                        LOG.info("JMS consumer terminated due to an interrupt");
+                        shutdown.set(true);
+                        return;
+                    }
+                }
+            } finally {
+                close();
+            }
+        }
+
+        private void receiveBatch() throws InterruptedException {
+            final long batchStartTs = System.currentTimeMillis();
+
+            Message lastCommitableMessage = null;
+            while (!shutdown.get()
+                        && !failed.get()
+                        && msgCount < batchSize
+                        && (System.currentTimeMillis() - batchStartTs) < ACK_INTERVAL_MS) {
+                //
+                // try to fetch the next message
+                //
+                Message message = null;
+                try {
+                    message = jmsConsumer.receive(100L);
+                } catch (final JMSException e) {
+                    LOG.warn("error consuming message: {}", e.getMessage());
+                }
+
+                //
+                // fail-fast if any message failed
+                //
+                if (failed.get()) {
+                    break;
+                }
+
+                //
+                // add message to outgoing queue
+                //
+                if (message != null) {
+                    try {
+                        msgCount++;
+
+                        final String jmsMessageID = message.getJMSMessageID();
+                        final JMSValues values = new JMSValues(jmsMessageID, tupleProducer.toTuple(message));
+
+                        if (values.values != null) {
+                            pending.add(jmsMessageID);
+                            queue.add(values);
+                        }
+
+                        lastCommitableMessage = message;
+                    } catch (final JMSException e) {
+                        LOG.error("Unable to convert JMS message: {}", message);
+                        try {
+                            moveToDMQ(message);
+                        } catch (final JMSException e1) {
+                            LOG.error("failed to moving message to the DMQ ({}): {}", message, e1.getMessage());
+                            restartConsumer();
+                        }
+                    }
+                }
+            }
+
+            //
+            // wait until
+            //   * outgoing queue is empty
+            //   * we're having no pending messages
+            //   * or we have a failure
+            //
+            lock.lock();
+            try {
+                while (!failed.get() && !queue.isEmpty()) {
+                    msgResponseReceived.await();
+                }
+
+                while (!failed.get()) {
+                    for (final String jmsMessageID : acked) {
+                        pending.remove(jmsMessageID);
+                    }
+                    acked.clear();
+
+                    if (pending.isEmpty()) {
+                        break;
+                    } else {
+                        msgResponseReceived.await();
+                    }
+                }
+            } catch (final InterruptedException e) {
+                LOG.info("recovering batch due to an interrupt");
+                try {
+                    jmsSession.recover();
+                } catch (final JMSException jmsException) {
+                    LOG.error("failed to recover JMS session: {}", jmsException.getMessage());
+                }
+                throw e;
+            } finally {
+                lock.unlock();
+            }
+
+            //
+            // finish batch
+            //
+            try {
+                if (failed.get()) {
+                    if (foreRestart.get()) {
+                        restartConsumer();
+                    } else {
+                        jmsSession.recover();
+                    }
+                } else  if (lastCommitableMessage != null) {
+                    lastCommitableMessage.acknowledge();
+                }
+            } catch (final JMSException e) {
+                LOG.error("failed to finish batch: {}", e.getMessage());
+                restartConsumer();
+            }
+
+            queue.clear();
+            pending.clear();
+            msgCount = 0;
+            failed.set(false);
+        }
+
+        void start() {
+            try {
+                jmsConnection = jmsProvider.connectionFactory().createConnection();
+                jmsConnection.setExceptionListener(this);
+                try {
+                    jmsSession = jmsConnection.createSession(false, jmsAcknowledgeMode);
+                    jmsConsumer = jmsSession.createConsumer(jmsProvider.destination(), jmsProvider.messageSelector());
+                    jmsConnection.start();
+                } catch (final JMSException e1) {
+                    jmsConnection.close();
+                    jmsConnection = null;
+                    jmsSession = null;
+                    jmsConsumer = null;
+                }
+            } catch (final Exception e) {
+                LOG.warn("Error creating JMS connection.", e);
+            }
+        }
+
+        void close() {
+            if (jmsConnection != null) {
+                try {
+                    LOG.debug("stopping JMS connection.");
+                    jmsConnection.stop();
+                } catch (final JMSException e) {
+                    LOG.warn("error stopping JMS connection.", e);
+                }
+
+                try {
+                    LOG.debug("closing JMS connection.");
+                    jmsConnection.stop();
+                } catch (final JMSException e) {
+                    LOG.warn("error closing JMS connection.", e);
+                }
+
+                jmsConnection = null;
+                jmsConsumer = null;
+                jmsSession = null;
+            }
+        }
+
+        private void restartConsumer() {
+            foreRestart.set(false);
+            close();
+            start();
+        }
+
+        void terminate() {
+            shutdown.set(true);
+        }
+
+        @Override
+        public void onException(final JMSException _exception) {
+            LOG.warn("got {} - restarting JMS consumer", _exception.getMessage());
+            foreRestart.set(true);
+            recover();
+        }
+
+        private void moveToDMQ(final Message _msg) throws JMSException {
+            final Session producerSession = jmsConnection.createSession(false, jmsAcknowledgeMode);
+            try {
+                final MessageProducer producer = producerSession.createProducer(_msg.getJMSDestination());
+                producer.send(_msg, _msg.getJMSDeliveryMode(), _msg.getJMSPriority(), 1);
+                producer.close();
+            } finally {
+                producerSession.close();
+            }
+        }
+
+
+        JMSValues nextTuple() {
+            return queue.poll();
+        }
+
+        void recover() {
+            try {
+                lock.lockInterruptibly();
+            } catch (final InterruptedException e) {
+                LOG.info("failed to notify JMS consumer about revovering due to an interrupt");
+                return;
+            }
+            try {
+                failed.set(true);
+                msgResponseReceived.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        void ack(final String _jmsMessageID) {
+            try {
+                lock.lockInterruptibly();
+            } catch (final InterruptedException e) {
+                failed.set(true);
+                LOG.info("failed to ack JMS message '{}' due to an interrupt", _jmsMessageID);
+                return;
+            }
+            try {
+                acked.add(_jmsMessageID);
+                msgResponseReceived.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
     }
 
 }

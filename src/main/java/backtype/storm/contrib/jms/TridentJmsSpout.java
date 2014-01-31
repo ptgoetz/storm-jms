@@ -364,10 +364,10 @@ public class TridentJmsSpout implements ITridentSpout<JmsBatch> {
             this.name = name;
             LOG.info("Created batch coordinator for "+name);
         }
-        
+
         @Override
-        public JmsBatch initializeTransaction(long txid, JmsBatch prevMetadata) {
-            LOG.debug("Initialise transaction "+txid+" for "+name);
+        public JmsBatch initializeTransaction(final long _txid, final JmsBatch _jmsBatch, final JmsBatch _jmsBatch2) {
+            LOG.debug("Initialise transaction "+_txid+" for "+name);
             return null;
         }
 
