@@ -8,7 +8,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import javax.jms.Connection;
@@ -60,6 +63,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     /** time in ms after a batch is committed, reagrdless of the number if messages consumed */
     private static final long ACK_INTERVAL_MS = 2000L;
+
+    private static final AtomicInteger THREAD_ID = new AtomicInteger();
 
     private int batchSize;
 
@@ -163,7 +168,14 @@ public class SynchronousJmsSpout extends BaseRichSpout {
         }
 
         collector = _collector;
-        executorService = Executors.newSingleThreadExecutor();
+        executorService = Executors.newSingleThreadExecutor(new ThreadFactory() {
+            @Override
+            public Thread newThread(final Runnable _runnable) {
+                final Thread thread = new Thread(_runnable);
+                thread.setName("thread-jms-consumer-" + THREAD_ID.incrementAndGet() + "-" + jmsProvider.getName());
+                return thread;
+            }
+        });
     }
 
     @Override
@@ -382,7 +394,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             lock.lock();
             try {
                 while (!failed.get() && !queue.isEmpty()) {
-                    msgResponseReceived.await();
+                    msgResponseReceived.await(5, TimeUnit.SECONDS);
                 }
 
                 while (!failed.get()) {
@@ -394,7 +406,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                     if (pending.isEmpty()) {
                         break;
                     } else {
-                        msgResponseReceived.await();
+                        msgResponseReceived.await(5, TimeUnit.SECONDS);
                     }
                 }
             } catch (final InterruptedException e) {

@@ -22,7 +22,12 @@ public class MockJmsProvider implements JmsProvider {
         this.destination = (Destination) jndiContext.lookup("dynamicQueues/FOO.BAR");        
 
     }
-    
+
+    @Override
+    public String getName() {
+        return "mock-jms";
+    }
+
     /**
      * Provides the JMS <code>ConnectionFactory</code>
      * @return the connection factory

@@ -13,6 +13,13 @@ import javax.jms.Destination;
  *
  */
 public interface JmsProvider extends Serializable{
+
+    /**
+     * @return name, which identifies this specific provider instance in order to name dependent resources like
+     * consumer threads.
+     */
+    String getName();
+
 	/**
 	 * Provides the JMS <code>ConnectionFactory</code>
 	 * @return the connection factory
