@@ -61,10 +61,10 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
     private static final int DEFAULT_BATCH_SIZE = 50;
 
-    /** time in ms after a batch is committed, reagrdless of the number if messages consumed */
-    private static final long ACK_INTERVAL_MS = 2000L;
-
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
+
+    /** time in ms after a batch is committed, reagrdless of the number if messages consumed */
+    private final long commitIntervalMs;
 
     private int batchSize;
 
@@ -85,7 +85,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
 
     public SynchronousJmsSpout() {
-        batchSize = DEFAULT_BATCH_SIZE;
+        this(DEFAULT_BATCH_SIZE);
     }
     
     /**
@@ -93,7 +93,12 @@ public class SynchronousJmsSpout extends BaseRichSpout {
      * @param _batchSize Defines the batch size to be used.
      */
     public SynchronousJmsSpout(int _batchSize) {
+        this(_batchSize, 2, TimeUnit.SECONDS);
+    }
+
+    public SynchronousJmsSpout(int _batchSize, final long _commitInterval, final TimeUnit _commitIntervalUnit) {
         batchSize = _batchSize;
+        commitIntervalMs = _commitIntervalUnit.toMillis(_commitInterval);
     }
 
     /**
@@ -338,16 +343,23 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             Message lastCommitableMessage = null;
             while (!shutdown.get()
                         && !failed.get()
-                        && msgCount < batchSize
-                        && (System.currentTimeMillis() - batchStartTs) < ACK_INTERVAL_MS) {
+                        && msgCount < batchSize) {
+
+                final long timeLeftMs = commitIntervalMs - (System.currentTimeMillis() - batchStartTs);
+                if (timeLeftMs <= 0) {
+                    break;
+                }
+
                 //
                 // try to fetch the next message
                 //
-                Message message = null;
+                Message message;
                 try {
-                    message = jmsConsumer.receive(100L);
+                    message = jmsConsumer.receive(timeLeftMs);
                 } catch (final JMSException e) {
-                    LOG.warn("error consuming message: {}", e.getMessage());
+                    LOG.warn("error consuming message - recovering session: {}", e.getMessage());
+                    failed.set(true);
+                    break;
                 }
 
                 //
@@ -383,6 +395,11 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                         }
                     }
                 }
+            }
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("finished receiving batch of {} msgs after {} ms", msgCount,
+                        (System.currentTimeMillis() - batchStartTs));
             }
 
             //
@@ -437,6 +454,10 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             } catch (final JMSException e) {
                 LOG.error("failed to finish batch: {}", e.getMessage());
                 restartConsumer();
+            }
+
+            if (LOG.isDebugEnabled()) {
+        	    LOG.debug("acked batch of {} msgs after {} ms", msgCount, (System.currentTimeMillis() - batchStartTs));
             }
 
             queue.clear();
