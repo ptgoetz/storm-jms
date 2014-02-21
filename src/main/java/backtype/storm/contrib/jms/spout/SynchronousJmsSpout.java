@@ -1,5 +1,6 @@
 package backtype.storm.contrib.jms.spout;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -238,7 +239,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     @Override
     public void ack(final Object _msgId) {
         if (consumer != null) {
-            consumer.ack((String) _msgId);
+            consumer.ack((MessageId) _msgId);
         }
     }
 
@@ -249,7 +250,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     public void fail(final Object _msgId) {
         LOG.warn("message failed: {}", _msgId);
         if (consumer != null) {
-            consumer.fail((String) _msgId);
+            consumer.fail((MessageId) _msgId);
         }
     }
 
@@ -282,10 +283,10 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     }
 
     private static class JMSValues {
-        final String messageId;
+        final MessageId messageId;
         final Values values;
 
-        JMSValues(final String _messageId, final Values _values) throws JMSException {
+        JMSValues(final MessageId _messageId, final Values _values) throws JMSException {
             messageId = _messageId;
             values = _values;
         }
@@ -303,7 +304,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
         private final AtomicLong batchId = new AtomicLong(0);
 
-        private final Set<String> pending = new HashSet<String>();
+        private final Set<MessageId> pending = new HashSet<MessageId>();
 
         private final AtomicBoolean failed = new AtomicBoolean(false);
 
@@ -315,7 +316,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
         private final Condition msgResponseReceived = lock.newCondition();
 
-        private final List<String> acked = new ArrayList<String>(batchSize);
+        private final List<MessageId> acked = new ArrayList<MessageId>(batchSize);
 
         private final ConcurrentLinkedQueue<JMSValues> queue = new ConcurrentLinkedQueue<JMSValues>();
 
@@ -381,8 +382,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                     try {
                         msgCount++;
 
-                        final String jmsMessageID = message.getJMSMessageID();
-                        final String messageId = createMessageId(jmsMessageID);
+                        final MessageId messageId = new MessageId(batchId.get(), message.getJMSMessageID());
                         final JMSValues values = new JMSValues(messageId, tupleProducer.toTuple(message));
 
                         if (values.values != null) {
@@ -421,7 +421,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                 }
 
                 while (!failed.get()) {
-                    for (final String messageId : acked) {
+                    for (final MessageId messageId : acked) {
                         pending.remove(messageId);
                     }
                     acked.clear();
@@ -470,14 +470,6 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             pending.clear();
             msgCount = 0;
             failed.set(false);
-        }
-
-        private String createMessageId(final String _jmsMessageID) {
-            return batchId.get() + ":" + _jmsMessageID;
-        }
-
-        private long getBatchId(final String _messageId) {
-            return Long.parseLong(_messageId.substring(0, _messageId.indexOf(':')));
         }
 
         void start() {
@@ -554,8 +546,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             return queue.poll();
         }
 
-        void ack(final String _messageId) {
-            if (getBatchId(_messageId) != batchId.get()) {
+        void ack(final MessageId _messageId) {
+            if (_messageId.batchId != batchId.get()) {
                 LOG.info("batch id mismatch - ignored to ack message '{}', current batch id is {}",
                         _messageId, batchId.get());
                 return;
@@ -575,8 +567,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             }
         }
 
-        void fail(final String _messageId) {
-            if (getBatchId(_messageId) != batchId.get()) {
+        void fail(final MessageId _messageId) {
+            if (_messageId.batchId != batchId.get()) {
                 LOG.info("batch id mismatch - ignored to fail message '{}', current batch id is {}",
                         _messageId, batchId.get());
                 return;
@@ -611,6 +603,54 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             } finally {
                 lock.unlock();
             }
+        }
+
+
+    }
+
+    private static class MessageId implements Serializable {
+        private final long batchId;
+        private final String jmsMessageID;
+
+        private MessageId(final long _batchId, final String _jmsMessageID) {
+            batchId = _batchId;
+            jmsMessageID = _jmsMessageID;
+        }
+
+        @Override
+        public String toString() {
+            return "MessageId{" +
+                    "batchId=" + batchId +
+                    ", jmsMessageID='" + jmsMessageID + '\'' +
+                    '}';
+        }
+
+        @Override
+        public boolean equals(final Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+
+            final MessageId messageId = (MessageId) o;
+
+            if (batchId != messageId.batchId) {
+                return false;
+            }
+            if (!jmsMessageID.equals(messageId.jmsMessageID)) {
+                return false;
+            }
+
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = (int) (batchId ^ (batchId >>> 32));
+            result = 31 * result + jmsMessageID.hashCode();
+            return result;
         }
     }
 }
