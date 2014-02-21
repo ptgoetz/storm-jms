@@ -12,6 +12,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import javax.jms.Connection;
@@ -214,7 +215,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             final JMSValues jmsValues = consumer.nextTuple();
             if (jmsValues != null) {
                 if (jmsAcknowledgeMode == Session.CLIENT_ACKNOWLEDGE) {
-                    collector.emit(jmsValues.values, jmsValues.jmsMessageID);
+                    collector.emit(jmsValues.values, jmsValues.messageId);
                 } else {
                     collector.emit(jmsValues.values);
                 }
@@ -248,7 +249,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     public void fail(final Object _msgId) {
         LOG.warn("message failed: {}", _msgId);
         if (consumer != null) {
-            consumer.recover();
+            consumer.fail((String) _msgId);
         }
     }
 
@@ -281,11 +282,11 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     }
 
     private static class JMSValues {
-        final String jmsMessageID;
+        final String messageId;
         final Values values;
 
-        JMSValues(final String _jmsMessageID, final Values _values) throws JMSException {
-            jmsMessageID = _jmsMessageID;
+        JMSValues(final String _messageId, final Values _values) throws JMSException {
+            messageId = _messageId;
             values = _values;
         }
     }
@@ -299,6 +300,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
         private transient MessageConsumer jmsConsumer;
 
         private int msgCount = 0;
+
+        private final AtomicLong batchId = new AtomicLong(0);
 
         private final Set<String> pending = new HashSet<String>();
 
@@ -331,6 +334,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                         shutdown.set(true);
                         return;
                     }
+
+                    batchId.incrementAndGet();
                 }
             } finally {
                 close();
@@ -377,10 +382,11 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                         msgCount++;
 
                         final String jmsMessageID = message.getJMSMessageID();
-                        final JMSValues values = new JMSValues(jmsMessageID, tupleProducer.toTuple(message));
+                        final String messageId = createMessageId(jmsMessageID);
+                        final JMSValues values = new JMSValues(messageId, tupleProducer.toTuple(message));
 
                         if (values.values != null) {
-                            pending.add(jmsMessageID);
+                            pending.add(messageId);
                             queue.add(values);
                         }
 
@@ -415,8 +421,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                 }
 
                 while (!failed.get()) {
-                    for (final String jmsMessageID : acked) {
-                        pending.remove(jmsMessageID);
+                    for (final String messageId : acked) {
+                        pending.remove(messageId);
                     }
                     acked.clear();
 
@@ -466,6 +472,14 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             failed.set(false);
         }
 
+        private String createMessageId(final String _jmsMessageID) {
+            return batchId.get() + ":" + _jmsMessageID;
+        }
+
+        private long getBatchId(final String _messageId) {
+            return Long.parseLong(_messageId.substring(0, _messageId.indexOf(':')));
+        }
+
         void start() {
             try {
                 jmsConnection = jmsProvider.connectionFactory().createConnection();
@@ -496,7 +510,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
                 try {
                     LOG.debug("closing JMS connection.");
-                    jmsConnection.stop();
+                    jmsConnection.close();
                 } catch (final JMSException e) {
                     LOG.warn("error closing JMS connection.", e);
                 }
@@ -540,6 +554,49 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             return queue.poll();
         }
 
+        void ack(final String _messageId) {
+            if (getBatchId(_messageId) != batchId.get()) {
+                LOG.info("batch id mismatch - ignored to ack message '{}', current batch id is {}",
+                        _messageId, batchId.get());
+                return;
+            }
+            try {
+                lock.lockInterruptibly();
+            } catch (final InterruptedException e) {
+                failed.set(true);
+                LOG.info("failed to ack JMS message '{}' due to an interrupt", _messageId);
+                return;
+            }
+            try {
+                acked.add(_messageId);
+                msgResponseReceived.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        void fail(final String _messageId) {
+            if (getBatchId(_messageId) != batchId.get()) {
+                LOG.info("batch id mismatch - ignored to fail message '{}', current batch id is {}",
+                        _messageId, batchId.get());
+                return;
+            }
+            try {
+                lock.lockInterruptibly();
+            } catch (final InterruptedException e) {
+                failed.set(true);
+                LOG.info("failed to notify JMS consumer to recover after a failed JMS message '{}' due to an interrupt", _messageId);
+                return;
+            }
+            try {
+                failed.set(true);
+                queue.clear();
+                msgResponseReceived.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
         void recover() {
             try {
                 lock.lockInterruptibly();
@@ -549,28 +606,11 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             }
             try {
                 failed.set(true);
+                queue.clear();
                 msgResponseReceived.signalAll();
             } finally {
                 lock.unlock();
             }
         }
-
-        void ack(final String _jmsMessageID) {
-            try {
-                lock.lockInterruptibly();
-            } catch (final InterruptedException e) {
-                failed.set(true);
-                LOG.info("failed to ack JMS message '{}' due to an interrupt", _jmsMessageID);
-                return;
-            }
-            try {
-                acked.add(_jmsMessageID);
-                msgResponseReceived.signalAll();
-            } finally {
-                lock.unlock();
-            }
-        }
-
     }
-
 }
