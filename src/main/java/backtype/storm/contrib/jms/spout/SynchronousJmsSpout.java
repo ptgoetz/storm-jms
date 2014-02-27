@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -84,6 +85,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
     private transient ExecutorService executorService;
 
     private transient Consumer consumer;
+
+    private transient Future<?> consumerFuture;
 
 
     public SynchronousJmsSpout() {
@@ -198,7 +201,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
 
         consumer = new Consumer();
         consumer.start();
-        executorService.submit(consumer);
+        consumerFuture = executorService.submit(consumer);
     }
 
     @Override
@@ -206,6 +209,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
         super.deactivate();
 
         consumer.terminate();
+        consumerFuture.cancel(true);
+
         consumer = null;
     }
 
@@ -301,6 +306,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
         private transient MessageConsumer jmsConsumer;
 
         private int msgCount = 0;
+
+        private boolean lastBatchFailed = false;
 
         private final AtomicLong batchId = new AtomicLong(0);
 
@@ -416,7 +423,7 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             //
             lock.lock();
             try {
-                while (!failed.get() && !queue.isEmpty()) {
+                while (!shutdown.get() && !failed.get() && !queue.isEmpty()) {
                     msgResponseReceived.await(5, TimeUnit.SECONDS);
                 }
 
@@ -425,6 +432,10 @@ public class SynchronousJmsSpout extends BaseRichSpout {
                         pending.remove(messageId);
                     }
                     acked.clear();
+
+                    if (shutdown.get()) {
+                        break;
+                    }
 
                     if (pending.isEmpty()) {
                         break;
@@ -435,7 +446,11 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             } catch (final InterruptedException e) {
                 LOG.info("recovering batch due to an interrupt");
                 try {
-                    jmsSession.recover();
+                    if (pending.isEmpty() && lastCommitableMessage != null) {
+                        lastCommitableMessage.acknowledge();
+                    } else {
+                        jmsSession.recover();
+                    }
                 } catch (final JMSException jmsException) {
                     LOG.error("failed to recover JMS session: {}", jmsException.getMessage());
                 }
@@ -448,14 +463,17 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             // finish batch
             //
             try {
-                if (failed.get()) {
+                if (failed.get() || (shutdown.get() && !pending.isEmpty())) {
                     if (foreRestart.get()) {
                         restartConsumer();
                     } else {
                         jmsSession.recover();
                     }
-                } else  if (lastCommitableMessage != null) {
+                } else if (lastCommitableMessage != null) {
                     lastCommitableMessage.acknowledge();
+                } else if (lastBatchFailed) {
+                    LOG.warn("didn't got any messages after recovering from an error - restarting JMS connection");
+                    restartConsumer();
                 }
             } catch (final JMSException e) {
                 LOG.error("failed to finish batch: {}", e.getMessage());
@@ -469,7 +487,8 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             queue.clear();
             pending.clear();
             msgCount = 0;
-            failed.set(false);
+
+            lastBatchFailed = failed.getAndSet(false);
         }
 
         void start() {
@@ -494,28 +513,21 @@ public class SynchronousJmsSpout extends BaseRichSpout {
         void close() {
             if (jmsConnection != null) {
                 try {
-                    LOG.debug("stopping JMS connection.");
-                    jmsConnection.stop();
-                } catch (final JMSException e) {
-                    LOG.warn("error stopping JMS connection.", e);
-                }
-
-                try {
                     LOG.debug("closing JMS connection.");
                     jmsConnection.close();
+                    jmsConnection = null;
+                    jmsConsumer = null;
+                    jmsSession = null;
                 } catch (final JMSException e) {
                     LOG.warn("error closing JMS connection.", e);
                 }
-
-                jmsConnection = null;
-                jmsConsumer = null;
-                jmsSession = null;
             }
         }
 
         private void restartConsumer() {
             foreRestart.set(false);
             close();
+            Utils.sleep(150);
             start();
         }
 
