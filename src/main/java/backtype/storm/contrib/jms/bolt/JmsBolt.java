@@ -60,7 +60,8 @@ public class JmsBolt extends BaseRichBolt {
 	// JMS options
 	private boolean jmsTransactional = false;
 	private int jmsAcknowledgeMode = Session.AUTO_ACKNOWLEDGE;
-	
+	private String username;
+	private String password;
 	
 	private JmsProvider jmsProvider;
 	private JmsMessageProducer producer;
@@ -84,6 +85,22 @@ public class JmsBolt extends BaseRichBolt {
 	 */
 	public void setJmsMessageProducer(JmsMessageProducer producer){
 		this.producer = producer;
+	}
+	
+	/**
+	 * Set the username for the connection
+	 * @param username
+	 */
+	public void setUsername(String username) {
+		this.username = username;
+	}
+
+	/**
+	 * Set the password for the connection
+	 * @param password
+	 */
+	public void setPassword(String password) {
+		this.password = password;
 	}
 	
 	/**
@@ -188,7 +205,11 @@ public class JmsBolt extends BaseRichBolt {
 		try {
 			ConnectionFactory cf = this.jmsProvider.connectionFactory();
 			Destination dest = this.jmsProvider.destination();
-			this.connection = cf.createConnection();
+			if (this.username != null) {
+				this.connection = cf.createConnection(username, password);
+			} else {
+				this.connection = cf.createConnection();
+			}
 			this.session = connection.createSession(this.jmsTransactional,
 					this.jmsAcknowledgeMode);
 			this.messageProducer = session.createProducer(dest);
