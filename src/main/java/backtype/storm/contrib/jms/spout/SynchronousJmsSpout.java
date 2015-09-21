@@ -458,6 +458,10 @@ public class SynchronousJmsSpout extends BaseRichSpout {
             } finally {
                 lock.unlock();
             }
+            
+            if (LOG.isDebugEnabled()) {
+        	    LOG.debug("after respionse receive wait batch of {} msgs after {} ms", msgCount, (System.currentTimeMillis() - batchStartTs));
+            }
 
             //
             // finish batch
