@@ -1,0 +1,32 @@
+group 'com.sky.search.e20m'
+version '1.0.0'
+
+task wrapper(type: Wrapper) {
+  gradleVersion = '2.9'
+  distributionUrl = "https://services.gradle.org/distributions/gradle-$gradleVersion-all.zip"
+}
+
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+
+    repositories {
+        mavenLocal()
+        maven {
+            url "${artifactory_contextUrl}/repo"
+            credentials {
+                username = artifactory_user
+                password = artifactory_password
+            }
+        }
+    }
+
+dependencies {
+    def stormVersion = '1.0.0'
+
+    compile "org.apache.storm:storm-core:${stormVersion}"
+    compile 'org.apache.geronimo.specs:geronimo-jms_1.1_spec:1.1.1'
+
+    testCompile 'org.apache.activemq:activemq-core:5.5.1'
+    testCompile 'junit:junit:4.11'
+}
