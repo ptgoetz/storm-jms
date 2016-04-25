@@ -32,10 +32,9 @@ import javax.jms.TextMessage;
 
 import org.junit.Assert;
 import org.junit.Test;
-import org.mortbay.log.Log;
 
 import org.apache.storm.jms.JmsProvider;
-import backtype.storm.spout.SpoutOutputCollector;
+import org.apache.storm.spout.SpoutOutputCollector;
 
 public class JmsSpoutTest {
     @Test
@@ -77,9 +76,7 @@ public class JmsSpoutTest {
         MessageProducer producer = mySess.createProducer(destination);
         TextMessage msg = mySess.createTextMessage();
         msg.setText("Hello World");
-        Log.debug("Sending Message: " + msg.getText());
         producer.send(msg);
         return msg;
     }
-
 }
