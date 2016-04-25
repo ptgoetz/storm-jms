@@ -25,7 +25,7 @@
 
 
 	<modelVersion>4.0.0</modelVersion>
-	<groupId>com.github.ptgoetz</groupId>
+	<groupId>com.sky.search.e20m</groupId>
 	<artifactId>storm-jms</artifactId>
 	<version>1.0.0</version>
 	<name>Storm JMS</name>
