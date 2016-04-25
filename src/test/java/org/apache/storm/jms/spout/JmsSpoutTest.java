@@ -35,7 +35,7 @@ import org.junit.Test;
 import org.mortbay.log.Log;
 
 import org.apache.storm.jms.JmsProvider;
-import backtype.storm.spout.SpoutOutputCollector;
+import org.apache.storm.spout.SpoutOutputCollector;
 
 public class JmsSpoutTest {
     @Test

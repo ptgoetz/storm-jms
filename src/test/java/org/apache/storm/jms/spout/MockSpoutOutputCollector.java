@@ -20,7 +20,7 @@ package org.apache.storm.jms.spout;
 import java.util.ArrayList;
 import java.util.List;
 
-import backtype.storm.spout.ISpoutOutputCollector;
+import org.apache.storm.spout.ISpoutOutputCollector;
 
 public class MockSpoutOutputCollector implements ISpoutOutputCollector {
     boolean emitted = false;
@@ -38,6 +38,11 @@ public class MockSpoutOutputCollector implements ISpoutOutputCollector {
 
     @Override
     public void reportError(Throwable error) {
+    }
+
+    @Override
+    public long getPendingCount() {
+        return 0L;
     }
 
     public boolean emitted(){
