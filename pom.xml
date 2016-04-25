@@ -68,6 +68,20 @@
 	<properties>
 		<storm.version>1.0.0</storm.version>
 	</properties>
+
+	<distributionManagement>
+		<repository>
+			<id>artifactory-releases</id>
+			<name>artifactory.ath.skycdc.com-releases</name>
+			<url>http://artifactory.ath.skycdc.com/artifactory/search-repo</url>
+		</repository>
+		<snapshotRepository>
+			<id>artifactory-snapshots</id>
+			<name>artifactory.ath.skycdc.com-snapshots</name>
+			<url>http://artifactory.ath.skycdc.com/artifactory/search-repo</url>
+		</snapshotRepository>
+	</distributionManagement>
+
 	<dependencies>
 		<dependency>
 			<groupId>org.apache.storm</groupId>
@@ -121,8 +135,8 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
-					<source>1.6</source>
-					<target>1.6</target>
+					<source>1.8</source>
+					<target>1.8</target>
 				</configuration>
 			</plugin>
 		</plugins>
