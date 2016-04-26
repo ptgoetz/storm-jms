@@ -1,7 +1,7 @@
 package org.apache.storm.jms.trident;
 
-import backtype.storm.tuple.Tuple;
-import storm.trident.tuple.TridentTuple;
+import org.apache.storm.tuple.Tuple;
+import org.apache.storm.trident.tuple.TridentTuple;
 
 import javax.jms.JMSException;
 import javax.jms.Message;
@@ -11,7 +11,7 @@ import java.io.Serializable;
 public interface TridentJmsMessageProducer extends Serializable{
 
 	/**
-	 * Translate a <code>backtype.storm.tuple.TridentTuple</code> object
+	 * Translate a <code>org.apache.storm.tuple.TridentTuple</code> object
 	 * to a <code>javax.jms.Message</code object.
 	 *
 	 * @param session
