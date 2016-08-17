@@ -12,6 +12,7 @@ import javax.jms.Message;
 import javax.jms.MessageConsumer;
 import javax.jms.MessageListener;
 import javax.jms.Session;
+import javax.jms.ExceptionListener;
 
 import org.apache.storm.topology.base.BaseRichSpout;
 import org.slf4j.Logger;
@@ -44,7 +45,7 @@ import org.apache.storm.utils.Utils;
  *
  */
 @SuppressWarnings("serial")
-public class JmsSpout extends BaseRichSpout implements MessageListener {
+public class JmsSpout extends BaseRichSpout implements MessageListener, ExceptionListener {
 	private static final Logger LOG = LoggerFactory.getLogger(JmsSpout.class);
 
 	// JMS options
@@ -65,13 +66,15 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 
 	private transient Connection connection;
 	private transient Session session;
+    private final static int NUM_RETRIES = 20;
 	
 	private boolean hasFailures = false;
 	public final Serializable recoveryMutex = "RECOVERY_MUTEX";
 	private Timer recoveryTimer = null;
 	private long recoveryPeriod = -1; // default to disabled
-	
-	/**
+    private long retryPeriod = 30000;
+
+    /**
 	 * Sets the JMS Session acknowledgement mode for the JMS seesion associated with this spout.
 	 * <p/>
 	 * Possible values:
@@ -148,6 +151,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 	 * 
 	 */
 	@SuppressWarnings("rawtypes")
+    @Override
 	public void open(Map conf, TopologyContext context,
 			SpoutOutputCollector collector) {
 		if(this.jmsProvider == null){
@@ -170,36 +174,27 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
         this.pendingMessages = new HashMap<JmsMessageID, Message>();
 		this.collector = collector;
 		try {
-			ConnectionFactory cf = this.jmsProvider.connectionFactory();
-			Destination dest = this.jmsProvider.destination();
-			this.connection = cf.createConnection();
-			this.session = connection.createSession(false,
-					this.jmsAcknowledgeMode);
-			MessageConsumer consumer = session.createConsumer(dest);
-			consumer.setMessageListener(this);
-			this.connection.start();
-			if (this.isDurableSubscription() && this.recoveryPeriod > 0){
-			    this.recoveryTimer = new Timer();
-			    this.recoveryTimer.scheduleAtFixedRate(new RecoveryTask(), 10, this.recoveryPeriod);
-			}
-			
+			createJMSConnection();
 		} catch (Exception e) {
 			LOG.warn("Error creating JMS connection.", e);
 		}
 
 	}
 
+    @Override
 	public void close() {
 		try {
 			LOG.debug("Closing JMS connection.");
 			this.session.close();
 			this.connection.close();
+            this.recoveryTimer.cancel();
 		} catch (JMSException e) {
 			LOG.warn("Error closing JMS connection.", e);
 		}
 
 	}
 
+    @Override
 	public void nextTuple() {
 		Message msg = this.queue.poll();
 		if (msg == null) {
@@ -277,6 +272,45 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 
 	}
 
+	@Override
+	public void onException(JMSException exception) {
+		boolean restarted = false;
+        int tries = 0;
+        LOG.error("Exception from JMS connection. Will attempt to restart.", exception);
+        close();
+		while(!restarted && tries < NUM_RETRIES) {
+            tries++;
+			try {
+                Utils.sleep(retryPeriod);
+				createJMSConnection();
+				LOG.error("Successfully restarted JMS connection.");
+				restarted = true;
+			} catch (Exception e) {
+				LOG.error("Error restarting JMS Connection. Attempt " + tries, e);
+			}
+		}
+		if(!restarted) {
+			LOG.error("Unable to reconnect to JMS broker. Topology must be restarted.");
+            throw new RuntimeException("Killing JMS Spout as cannot connect to broker.");
+		}
+	}
+
+	private void createJMSConnection() throws Exception {
+		ConnectionFactory cf = this.jmsProvider.connectionFactory();
+		Destination dest = this.jmsProvider.destination();
+		this.connection = cf.createConnection();
+		this.session = connection.createSession(false,
+				this.jmsAcknowledgeMode);
+		MessageConsumer consumer = session.createConsumer(dest);
+		consumer.setMessageListener(this);
+		this.connection.setExceptionListener(this);
+		this.connection.start();
+		if (this.isDurableSubscription() && this.recoveryPeriod > 0){
+			this.recoveryTimer = new Timer();
+			this.recoveryTimer.scheduleAtFixedRate(new RecoveryTask(), 10, this.recoveryPeriod);
+		}
+	}
+
 	/**
          * Returns <code>true</code> if the spout has received failures 
          * from which it has not yet recovered.
@@ -298,6 +332,8 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 	public void setRecoveryPeriod(long period){
 	    this.recoveryPeriod = period;
 	}
+
+    public void setConnectionRetryPeriod(long period) { this.retryPeriod = period; }
 	
 	public boolean isDistributed() {
 		return this.distributed;

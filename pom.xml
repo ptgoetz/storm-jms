@@ -16,21 +16,23 @@
  limitations under the License.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-
 	<parent>
 		<groupId>org.sonatype.oss</groupId>
 		<artifactId>oss-parent</artifactId>
 		<version>7</version>
 	</parent>
 
+	<properties>
+		<storm.version>1.0.0</storm.version>
+		<next.version>1.0.0-SNAPSHOT</next.version>
+	</properties>
 
 	<modelVersion>4.0.0</modelVersion>
-	<groupId>com.github.ptgoetz</groupId>
+	<groupId>com.sky</groupId>
 	<artifactId>storm-jms</artifactId>
-	<version>1.0.0</version>
+	<version>${next.version}</version>
 	<name>Storm JMS</name>
 	<description>Storm JMS Components</description>
-
 
     <licenses>
         <license>
@@ -63,11 +65,6 @@
 			<email>andrey.pereverzin@sky.uk</email>
 		</developer>
 	</developers>
-
-
-	<properties>
-		<storm.version>1.0.0</storm.version>
-	</properties>
 
 	<distributionManagement>
 		<repository>

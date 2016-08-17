@@ -2,3 +2,5 @@
 *.iws
 *.iml
 target/
+.idea/
+activemq-data/

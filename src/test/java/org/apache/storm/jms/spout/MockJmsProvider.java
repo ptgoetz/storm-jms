@@ -32,12 +32,11 @@ public class MockJmsProvider implements JmsProvider {
 
     private ConnectionFactory connectionFactory = null;
     private Destination destination = null;
-    
-    public MockJmsProvider() throws NamingException{
-        this.connectionFactory = new ActiveMQConnectionFactory("vm://localhost?broker.persistent=false"); 
-        Context jndiContext = new InitialContext();
-        this.destination = (Destination) jndiContext.lookup("dynamicQueues/FOO.BAR");        
 
+    public MockJmsProvider() throws NamingException{
+        this.connectionFactory = new ActiveMQConnectionFactory("tcp://localhost:9999");
+        Context jndiContext = new InitialContext();
+        this.destination = (Destination) jndiContext.lookup("dynamicQueues/FOO.BAR");
     }
     
     /**
