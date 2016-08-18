@@ -14,6 +14,7 @@ import javax.jms.MessageListener;
 import javax.jms.Session;
 import javax.jms.ExceptionListener;
 
+import org.apache.storm.metric.api.MultiCountMetric;
 import org.apache.storm.topology.base.BaseRichSpout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +64,8 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
     private long messageSequence = 0;
 
 	private SpoutOutputCollector collector;
+
+    private MultiCountMetric counter;
 
 	private transient Connection connection;
 	private transient Session session;
@@ -173,10 +176,12 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
 		this.toCommit = new TreeSet<JmsMessageID>();
         this.pendingMessages = new HashMap<JmsMessageID, Message>();
 		this.collector = collector;
+        this.counter = new MultiCountMetric();
 		try {
 			createJMSConnection();
 		} catch (Exception e) {
 			LOG.warn("Error creating JMS connection.", e);
+			count(e);
 		}
 
 	}
@@ -218,11 +223,14 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
 					// JMS acknowledge later
 					this.pendingMessages.put(messageId, msg);
                     this.toCommit.add(messageId);
+					count("JMSSpoutSuccess");
 				} else {
 					this.collector.emit(vals);
+					count("JMSSpoutSuccess");
 				}
 			} catch (JMSException e) {
 				LOG.warn("Unable to convert JMS message: " + msg);
+				count(e);
 			}
 
 		}
@@ -244,7 +252,8 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
                     LOG.debug("JMS Message acked: " + msgId);
                     this.toCommit.remove(msgId);
                 } catch (JMSException e) {
-                    LOG.warn("Error acknowldging JMS message: " + msgId, e);
+					count(e);
+                    LOG.warn("Error acknowledging JMS message: " + msgId, e);
                 }
             } else {
                 LOG.warn("Couldn't acknowledge unknown JMS message ID: " + msgId);
@@ -260,6 +269,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
 	 */
 	public void fail(Object msgId) {
 		LOG.warn("Message failed: " + msgId);
+		count("JMSMessageFailed");
         this.pendingMessages.clear();
         this.toCommit.clear();
 		synchronized(this.recoveryMutex){
@@ -272,24 +282,37 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
 
 	}
 
+    private void count(String scope) {
+        counter.scope(scope).incr();
+    }
+
+    private void count(Throwable t) {
+        count(t.getClass().getSimpleName());
+    }
+
 	@Override
 	public void onException(JMSException exception) {
 		boolean restarted = false;
         int tries = 0;
+        count("JMSConnectionFailed");
+        count(exception);
         LOG.error("Exception from JMS connection. Will attempt to restart.", exception);
         close();
 		while(!restarted && tries < NUM_RETRIES) {
             tries++;
 			try {
+                count("JMSReconnectionAttempt");
                 Utils.sleep(retryPeriod);
 				createJMSConnection();
-				LOG.error("Successfully restarted JMS connection.");
+				LOG.info("Successfully restarted JMS connection.");
 				restarted = true;
 			} catch (Exception e) {
+				count(e);
 				LOG.error("Error restarting JMS Connection. Attempt " + tries, e);
 			}
 		}
 		if(!restarted) {
+            count("JMSSpoutDeath");
 			LOG.error("Unable to reconnect to JMS broker. Topology must be restarted.");
             throw new RuntimeException("Killing JMS Spout as cannot connect to broker.");
 		}
