@@ -176,6 +176,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
 		this.toCommit = new TreeSet<JmsMessageID>();
         this.pendingMessages = new HashMap<JmsMessageID, Message>();
 		this.collector = collector;
+		context.registerMetric("jms", counter, 10);
         this.counter = new MultiCountMetric();
 		try {
 			createJMSConnection();
