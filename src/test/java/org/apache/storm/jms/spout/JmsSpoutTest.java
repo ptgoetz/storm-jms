@@ -30,16 +30,33 @@ import javax.jms.MessageProducer;
 import javax.jms.Session;
 import javax.jms.TextMessage;
 
+import org.apache.activemq.broker.BrokerService;
+import org.apache.storm.task.TopologyContext;
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 import org.mortbay.log.Log;
 
 import org.apache.storm.jms.JmsProvider;
-import backtype.storm.spout.SpoutOutputCollector;
+import org.apache.storm.spout.SpoutOutputCollector;
 
 public class JmsSpoutTest {
+    BrokerService broker = null;
+
+    @Before
+    public void setup() throws Exception {
+        broker = createBrokerService();
+    }
+
+    @After
+    public void after() throws Exception {
+        broker.stop();
+        broker.waitUntilStopped();
+    }
+
     @Test
-    public void testFailure() throws JMSException, Exception{
+    public void testFailure() throws Exception {
         JmsSpout spout = new JmsSpout();
         JmsProvider mockProvider = new MockJmsProvider();
         MockSpoutOutputCollector mockCollector = new MockSpoutOutputCollector();
@@ -48,7 +65,7 @@ public class JmsSpoutTest {
         spout.setJmsTupleProducer(new MockTupleProducer());
         spout.setJmsAcknowledgeMode(Session.CLIENT_ACKNOWLEDGE);
         spout.setRecoveryPeriod(10); // Rapid recovery for testing.
-        spout.open(new HashMap<String,String>(), null, collector);
+        spout.open(new HashMap<String,String>(), new MockTopologyContext(), collector);
         Message msg = this.sendMessage(mockProvider.connectionFactory(), mockProvider.destination());
         Thread.sleep(100);
         spout.nextTuple(); // Pretend to be storm.
@@ -63,13 +80,40 @@ public class JmsSpoutTest {
     }
 
     @Test
-    public void testSerializability() throws IOException{
+    public void testSerializability() throws IOException {
         JmsSpout spout = new JmsSpout();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ObjectOutputStream oos = new ObjectOutputStream(out);
         oos.writeObject(spout);
         oos.close();
         Assert.assertTrue(out.toByteArray().length > 0);
+    }
+
+    @Test
+    public void testRetryConnection() throws Exception {
+        JmsSpout spout = new JmsSpout();
+        JmsProvider mockProvider = new MockJmsProvider();
+        MockSpoutOutputCollector mockCollector = new MockSpoutOutputCollector();
+        SpoutOutputCollector collector = new SpoutOutputCollector(mockCollector);
+        spout.setJmsProvider(new MockJmsProvider());
+        spout.setJmsTupleProducer(new MockTupleProducer());
+        spout.setJmsAcknowledgeMode(Session.CLIENT_ACKNOWLEDGE);
+        spout.setRecoveryPeriod(10); // Rapid recovery for testing.
+        spout.setConnectionRetryPeriod(1000);
+        spout.open(new HashMap<String,String>(), new MockTopologyContext(), collector);
+        this.sendMessage(mockProvider.connectionFactory(), mockProvider.destination());
+        Thread.sleep(100);
+        spout.nextTuple(); // Pretend to be storm.
+        Assert.assertTrue(mockCollector.emitted);
+        mockCollector.reset();
+        broker.stop();
+        broker.waitUntilStopped();
+        broker = createBrokerService();
+        Thread.sleep(2000);
+        this.sendMessage(mockProvider.connectionFactory(), mockProvider.destination());
+        Thread.sleep(100);
+        spout.nextTuple(); // Pretend to be storm.
+        Assert.assertTrue(mockCollector.emitted);
     }
     
     public Message sendMessage(ConnectionFactory connectionFactory, Destination destination) throws JMSException {        
@@ -80,6 +124,15 @@ public class JmsSpoutTest {
         Log.debug("Sending Message: " + msg.getText());
         producer.send(msg);
         return msg;
+    }
+
+    private BrokerService createBrokerService() throws Exception {
+        BrokerService broker = new BrokerService();
+        broker.addConnector("tcp://localhost:9999");
+        broker.setPersistent(false);
+        broker.start();
+        broker.waitUntilStarted();
+        return broker;
     }
 
 }

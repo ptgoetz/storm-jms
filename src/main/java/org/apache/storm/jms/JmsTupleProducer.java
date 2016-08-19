@@ -5,8 +5,8 @@ import java.io.Serializable;
 import javax.jms.JMSException;
 import javax.jms.Message;
 
-import backtype.storm.topology.OutputFieldsDeclarer;
-import backtype.storm.tuple.Values;
+import org.apache.storm.topology.OutputFieldsDeclarer;
+import org.apache.storm.tuple.Values;
 
 /**
  * Interface to define classes that can produce a Storm <code>Values</code> objects
@@ -24,7 +24,7 @@ import backtype.storm.tuple.Values;
  * @author P. Taylor Goetz
  *
  */
-public interface JmsTupleProducer extends Serializable{
+public interface JmsTupleProducer extends Serializable {
 	/**
 	 * Process a JMS message object to create a Values object.
 	 * @param msg - the JMS message
