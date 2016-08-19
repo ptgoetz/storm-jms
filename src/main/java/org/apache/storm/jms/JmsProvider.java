@@ -12,7 +12,7 @@ import javax.jms.Destination;
  * @author P. Taylor Goetz
  *
  */
-public interface JmsProvider extends Serializable{
+public interface JmsProvider extends Serializable {
 	/**
 	 * Provides the JMS <code>ConnectionFactory</code>
 	 * @return the connection factory

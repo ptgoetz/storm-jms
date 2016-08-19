@@ -18,7 +18,7 @@ import org.apache.storm.tuple.Values;
  * @author P. Taylor Goetz
  *
  */
-public interface JmsMessageProducer extends Serializable{
+public interface JmsMessageProducer extends Serializable {
 	
 	/**
 	 * Translate a <code>org.apache.storm.tuple.Tuple</code> object

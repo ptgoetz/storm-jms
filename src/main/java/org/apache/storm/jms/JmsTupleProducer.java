@@ -24,7 +24,7 @@ import org.apache.storm.tuple.Values;
  * @author P. Taylor Goetz
  *
  */
-public interface JmsTupleProducer extends Serializable{
+public interface JmsTupleProducer extends Serializable {
 	/**
 	 * Process a JMS message object to create a Values object.
 	 * @param msg - the JMS message
