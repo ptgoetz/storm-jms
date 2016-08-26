@@ -70,6 +70,8 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 	public final Serializable recoveryMutex = "RECOVERY_MUTEX";
 	private Timer recoveryTimer = null;
 	private long recoveryPeriod = -1; // default to disabled
+  
+  private String messageSelector;
 	
 	/**
 	 * Sets the JMS Session acknowledgement mode for the JMS seesion associated with this spout.
@@ -175,7 +177,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 			this.connection = cf.createConnection();
 			this.session = connection.createSession(false,
 					this.jmsAcknowledgeMode);
-			MessageConsumer consumer = session.createConsumer(dest);
+			MessageConsumer consumer = session.createConsumer(dest, messageSelector);
 			consumer.setMessageListener(this);
 			this.connection.start();
 			if (this.isDurableSubscription() && this.recoveryPeriod > 0){
@@ -363,4 +365,21 @@ public class JmsSpout extends BaseRichSpout implements MessageListener {
 	    }
 
 	}
+  
+  /**
+   * Sets a JMS Message Selector
+   * <p/>
+	 * A message selector is a String that contains an expression. 
+   * The syntax of the expression is based on a subset of the SQL92 conditional expression syntax. 
+   * The message selector in the example selects any message that has a NewsType property that is set 
+   * to the value 'Sports' or 'Opinion':
+   * <p/>
+   * <code>NewsType = ’Sports’ OR NewsType = ’Opinion’</code>
+	 * <p/>
+   * A value of null or an empty string means that there is no message selector
+   * @param messageSelector SQL92 conditional expression syntax
+   */
+  public void setMessageSelector(String messageSelector) {
+    this.messageSelector = messageSelector;
+  }
 }
