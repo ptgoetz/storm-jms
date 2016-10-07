@@ -175,6 +175,7 @@ public class JmsSpout extends BaseRichSpout implements MessageListener, Exceptio
         } catch (Exception e) {
             LOG.warn("Error creating JMS connection.", e);
             count(e);
+            throw new RuntimeException(e);
         }
 
     }
