@@ -30,7 +30,7 @@
 		</repository>
 	</repositories>
 	<properties>
-		<spring.version>2.5.6</spring.version>
+		<spring.version>5.2.0.RELEASE</spring.version>
 		<storm.version>0.9.3</storm.version>
 	</properties>
 	<dependencies>
